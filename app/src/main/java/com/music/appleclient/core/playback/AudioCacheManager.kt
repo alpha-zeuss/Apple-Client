@@ -38,7 +38,7 @@ class AudioCacheManager(
             .setUserAgent("AppleMusicClient/1.0 (Android; Audiophile Engine)")
     }
 
-    val cacheDataSourceFactory: DataSource.Factory by lazy {
+    val cacheDataSourceFactory: CacheDataSource.Factory by lazy {
         CacheDataSource.Factory()
             .setCache(simpleCache)
             .setUpstreamDataSourceFactory(upstreamFactory)

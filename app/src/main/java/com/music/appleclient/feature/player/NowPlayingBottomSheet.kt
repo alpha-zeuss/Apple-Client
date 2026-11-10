@@ -2,6 +2,7 @@ package com.music.appleclient.feature.player
 
 import androidx.compose.animation.core.Spring
 import androidx.compose.animation.core.spring
+import androidx.compose.animation.rememberSplineBasedDecay
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.gestures.AnchoredDraggableState
 import androidx.compose.foundation.gestures.DraggableAnchors
@@ -21,7 +22,6 @@ import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.util.lerp
 import com.music.appleclient.core.playback.PlayerController
 import com.music.appleclient.core.playback.PlayerUiState
 import kotlinx.coroutines.launch
@@ -45,26 +45,29 @@ fun NowPlayingBottomSheet(
     val miniPlayerHeightDp = 64.dp
     val miniPlayerHeightPx = with(density) { miniPlayerHeightDp.toPx() }
 
-    val draggableState = remember {
-        AnchoredDraggableState(
+    val decayAnimationSpec = rememberSplineBasedDecay<Float>()
+
+    val draggableState = remember(decayAnimationSpec) {
+        AnchoredDraggableState<SheetState>(
             initialValue = SheetState.COLLAPSED,
             positionalThreshold = { distance: Float -> distance * 0.5f },
             velocityThreshold = { with(density) { 125.dp.toPx() } },
-            snapAnimationSpec = spring(
+            snapAnimationSpec = spring<Float>(
                 dampingRatio = Spring.DampingRatioLowBouncy,
                 stiffness = Spring.StiffnessMediumLow
-            )
+            ),
+            decayAnimationSpec = decayAnimationSpec
         )
     }
 
     LaunchedEffect(sheetHeightPx, miniPlayerHeightPx) {
         if (sheetHeightPx > 0f) {
             val collapsedOffset = (sheetHeightPx - miniPlayerHeightPx).coerceAtLeast(0f)
-            val newAnchors = DraggableAnchors {
+            val newAnchors = DraggableAnchors<SheetState> {
                 SheetState.EXPANDED at 0f
                 SheetState.COLLAPSED at collapsedOffset
             }
-            draggableState.updateAnchors(newAnchors)
+            draggableState.updateAnchors(newAnchors, draggableState.currentValue)
         }
     }
 
@@ -77,8 +80,8 @@ fun NowPlayingBottomSheet(
     val maxOffset = (sheetHeightPx - miniPlayerHeightPx).coerceAtLeast(1f)
     val expansionProgress = (1f - (offset / maxOffset)).coerceIn(0f, 1f)
 
-    // Interpolate corner radius from 14dp (miniplayer) to 32dp (fullscreen)
-    val cornerRadius = lerp(14f, 32f, expansionProgress).dp
+    // Corner radius interpolated from 14dp to 32dp
+    val cornerRadius = (14f + (32f - 14f) * expansionProgress).dp
 
     Box(
         modifier = modifier
@@ -90,7 +93,7 @@ fun NowPlayingBottomSheet(
                 .fillMaxWidth()
                 .height(with(density) { sheetHeightPx.toDp() })
                 .offset { IntOffset(0, offset.roundToInt()) }
-                .anchoredDraggable(
+                .anchoredDraggable<SheetState>(
                     state = draggableState,
                     orientation = Orientation.Vertical
                 )
