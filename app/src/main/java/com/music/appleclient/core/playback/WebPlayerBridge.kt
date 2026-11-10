@@ -2,15 +2,33 @@ package com.music.appleclient.core.playback
 
 import android.annotation.SuppressLint
 import android.content.Context
+import android.os.Message
+import android.view.View
 import android.webkit.CookieManager
 import android.webkit.JavascriptInterface
 import android.webkit.WebChromeClient
 import android.webkit.WebSettings
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,7 +39,24 @@ class WebPlayerBridge(private val context: Context) {
     private val _playerState = MutableStateFlow(PlayerUiState())
     val playerState: StateFlow<PlayerUiState> = _playerState.asStateFlow()
 
+    var isAuthPopupOpen = mutableStateOf(false)
+        private set
+    var popupWebView = mutableStateOf<WebView?>(null)
+        private set
+
     private var webView: WebView? = null
+
+    fun showAuthPopup(childWebView: WebView) {
+        popupWebView.value = childWebView
+        isAuthPopupOpen.value = true
+    }
+
+    fun dismissAuthPopup() {
+        popupWebView.value?.destroy()
+        popupWebView.value = null
+        isAuthPopupOpen.value = false
+        CookieManager.getInstance().flush()
+    }
 
     inner class MusicKitJsBridge {
         @JavascriptInterface
@@ -49,7 +84,6 @@ class WebPlayerBridge(private val context: Context) {
                     )
                 )
             }
-            // Notify background media service to update system notification & lock screen
             PlaybackService.updateExternalMetadata(
                 title = title.ifEmpty { "Apple Music" },
                 artist = artist.ifEmpty { "Apple Music" },
@@ -163,6 +197,16 @@ class WebPlayerBridge(private val context: Context) {
     }
 
     companion object {
+        const val JS_BANNER_BLOCKER_INJECTION = """
+            (function() {
+                try {
+                    const style = document.createElement('style');
+                    style.innerHTML = '.upsell-banner, .country-switcher-banner, .web-navigation__native-upsell, .locale-switcher-banner, .banner-wrapper, [data-testid="upsell-banner"], [aria-label="Choose another country"] { display: none !important; }';
+                    document.head.appendChild(style);
+                } catch(e) {}
+            })();
+        """
+
         const val JS_OBSERVER_INJECTION = """
             (function() {
                 if (window.__appleClientInjected) return;
@@ -220,36 +264,137 @@ fun WebPlayerView(
     bridge: WebPlayerBridge,
     modifier: Modifier = Modifier
 ) {
-    AndroidView(
-        modifier = modifier,
-        factory = { ctx ->
-            WebView(ctx).apply {
-                settings.apply {
-                    javaScriptEnabled = true
-                    domStorageEnabled = true
-                    databaseEnabled = true
-                    mediaPlaybackRequiresUserGesture = false
-                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
-                    cacheMode = WebSettings.LOAD_DEFAULT
-                    userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+    Box(modifier = modifier) {
+        AndroidView(
+            modifier = Modifier.fillMaxSize(),
+            factory = { ctx ->
+                WebView(ctx).apply {
+                    isFocusable = true
+                    isFocusableInTouchMode = true
+                    requestFocus(View.FOCUS_DOWN)
+
+                    settings.apply {
+                        javaScriptEnabled = true
+                        domStorageEnabled = true
+                        databaseEnabled = true
+                        javaScriptCanOpenWindowsAutomatically = true
+                        setSupportMultipleWindows(true)
+                        mediaPlaybackRequiresUserGesture = false
+                        mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                        cacheMode = WebSettings.LOAD_DEFAULT
+                        userAgentString = "Mozilla/5.0 (Linux; Android 14; Mobile) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Mobile Safari/537.36"
+                    }
+
+                    CookieManager.getInstance().setAcceptCookie(true)
+                    CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
+                    webChromeClient = object : WebChromeClient() {
+                        override fun onCreateWindow(
+                            view: WebView?,
+                            isDialog: Boolean,
+                            isUserGesture: Boolean,
+                            resultMsg: Message?
+                        ): Boolean {
+                            if (resultMsg == null || view == null) return false
+
+                            val childWebView = WebView(view.context).apply {
+                                isFocusable = true
+                                isFocusableInTouchMode = true
+                                requestFocus(View.FOCUS_DOWN)
+
+                                settings.apply {
+                                    javaScriptEnabled = true
+                                    domStorageEnabled = true
+                                    databaseEnabled = true
+                                    javaScriptCanOpenWindowsAutomatically = true
+                                    setSupportMultipleWindows(true)
+                                    mixedContentMode = WebSettings.MIXED_CONTENT_ALWAYS_ALLOW
+                                    cacheMode = WebSettings.LOAD_DEFAULT
+                                    userAgentString = view.settings.userAgentString
+                                }
+
+                                CookieManager.getInstance().setAcceptCookie(true)
+                                CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+
+                                webChromeClient = object : WebChromeClient() {
+                                    override fun onCloseWindow(window: WebView?) {
+                                        super.onCloseWindow(window)
+                                        bridge.dismissAuthPopup()
+                                    }
+                                }
+
+                                webViewClient = object : WebViewClient() {
+                                    override fun onPageFinished(v: WebView?, u: String?) {
+                                        super.onPageFinished(v, u)
+                                        CookieManager.getInstance().flush()
+                                    }
+                                }
+                            }
+
+                            val transport = resultMsg.obj as? WebView.WebViewTransport
+                            if (transport != null) {
+                                transport.webView = childWebView
+                                resultMsg.sendToTarget()
+                                bridge.showAuthPopup(childWebView)
+                                return true
+                            }
+                            return false
+                        }
+
+                        override fun onCloseWindow(window: WebView?) {
+                            super.onCloseWindow(window)
+                            bridge.dismissAuthPopup()
+                        }
+                    }
+
+                    webViewClient = object : WebViewClient() {
+                        override fun onPageFinished(view: WebView?, url: String?) {
+                            super.onPageFinished(view, url)
+                            CookieManager.getInstance().flush()
+                            view?.evaluateJavascript(WebPlayerBridge.JS_BANNER_BLOCKER_INJECTION, null)
+                            view?.evaluateJavascript(WebPlayerBridge.JS_OBSERVER_INJECTION, null)
+                        }
+                    }
+
+                    addJavascriptInterface(bridge.MusicKitJsBridge(), "MusicKitBridge")
+                    loadUrl("https://music.apple.com/in/new")
+                    bridge.attachWebView(this)
                 }
+            }
+        )
 
-                CookieManager.getInstance().setAcceptCookie(true)
-                CookieManager.getInstance().setAcceptThirdPartyCookies(this, true)
+        // Fullscreen OAuth Popup Dialog for Apple ID Authentication
+        if (bridge.isAuthPopupOpen.value && bridge.popupWebView.value != null) {
+            Dialog(
+                onDismissRequest = { bridge.dismissAuthPopup() },
+                properties = DialogProperties(usePlatformDefaultWidth = false)
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(Color.Black)
+                        .statusBarsPadding()
+                        .navigationBarsPadding()
+                ) {
+                    AndroidView(
+                        factory = { bridge.popupWebView.value!! },
+                        modifier = Modifier.fillMaxSize()
+                    )
 
-                webChromeClient = WebChromeClient()
-                webViewClient = object : WebViewClient() {
-                    override fun onPageFinished(view: WebView?, url: String?) {
-                        super.onPageFinished(view, url)
-                        CookieManager.getInstance().flush()
-                        view?.evaluateJavascript(WebPlayerBridge.JS_OBSERVER_INJECTION, null)
+                    IconButton(
+                        onClick = { bridge.dismissAuthPopup() },
+                        modifier = Modifier
+                            .align(Alignment.TopEnd)
+                            .padding(16.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Rounded.Close,
+                            contentDescription = "Close Sign-In",
+                            tint = Color.White
+                        )
                     }
                 }
-
-                addJavascriptInterface(bridge.MusicKitJsBridge(), "MusicKitBridge")
-                loadUrl("https://music.apple.com")
-                bridge.attachWebView(this)
             }
         }
-    )
+    }
 }

@@ -2,6 +2,10 @@ package com.music.appleclient.core.playback
 
 import android.content.ComponentName
 import android.content.Context
+import android.media.AudioDeviceCallback
+import android.media.AudioDeviceInfo
+import android.media.AudioManager
+import android.os.Build
 import androidx.annotation.OptIn
 import androidx.compose.runtime.Immutable
 import androidx.media3.common.MediaItem
@@ -40,7 +44,7 @@ data class PlayerUiState(
     val positionMs: Long = 0L,
     val durationMs: Long = 1L,
     val bufferedPositionMs: Long = 0L,
-    val outputDeviceName: String = "iPhone Speaker"
+    val outputDeviceName: String = "Phone Speaker"
 )
 
 @OptIn(UnstableApi::class)
@@ -63,6 +67,52 @@ class PlayerController(
             setupPlayerListener()
             startPositionTicker()
         }, MoreExecutors.directExecutor())
+
+        setupAudioDeviceListener()
+    }
+
+    private fun setupAudioDeviceListener() {
+        val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return
+        updateAudioRoute(audioManager)
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            audioManager.registerAudioDeviceCallback(object : AudioDeviceCallback() {
+                override fun onAudioDevicesAdded(addedDevices: Array<out AudioDeviceInfo>?) {
+                    updateAudioRoute(audioManager)
+                }
+
+                override fun onAudioDevicesRemoved(removedDevices: Array<out AudioDeviceInfo>?) {
+                    updateAudioRoute(audioManager)
+                }
+            }, null)
+        }
+    }
+
+    private fun updateAudioRoute(audioManager: AudioManager) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            for (device in devices) {
+                when (device.type) {
+                    AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+                    AudioDeviceInfo.TYPE_BLUETOOTH_SCO,
+                    AudioDeviceInfo.TYPE_BLE_HEADSET,
+                    AudioDeviceInfo.TYPE_BLE_SPEAKER,
+                    AudioDeviceInfo.TYPE_BLE_BROADCAST -> {
+                        val name = device.productName?.toString()?.trim()
+                        _uiState.update { it.copy(outputDeviceName = if (!name.isNullOrEmpty()) name else "Bluetooth Audio") }
+                        return
+                    }
+                    AudioDeviceInfo.TYPE_WIRED_HEADSET,
+                    AudioDeviceInfo.TYPE_WIRED_HEADPHONES,
+                    AudioDeviceInfo.TYPE_USB_HEADSET -> {
+                        val name = device.productName?.toString()?.trim()
+                        _uiState.update { it.copy(outputDeviceName = if (!name.isNullOrEmpty()) name else "Headphones") }
+                        return
+                    }
+                }
+            }
+        }
+        _uiState.update { it.copy(outputDeviceName = "Phone Speaker") }
     }
 
     fun attachWebPlayerBridge(bridge: WebPlayerBridge) {
@@ -70,7 +120,9 @@ class PlayerController(
         scope.launch {
             bridge.playerState.collect { webState ->
                 if (webState.currentTrack.title != "No Track Playing") {
-                    _uiState.update { webState }
+                    _uiState.update { current ->
+                        webState.copy(outputDeviceName = current.outputDeviceName)
+                    }
                 }
             }
         }

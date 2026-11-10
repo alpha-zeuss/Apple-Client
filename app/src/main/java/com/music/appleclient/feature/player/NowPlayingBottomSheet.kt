@@ -20,6 +20,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.music.appleclient.core.playback.PlayerController
@@ -37,13 +38,16 @@ enum class SheetState {
 fun NowPlayingBottomSheet(
     playerState: PlayerUiState,
     playerController: PlayerController,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    navBarBottomOffsetDp: Dp = 56.dp,
+    onProgressChanged: (Float) -> Unit = {}
 ) {
     val density = LocalDensity.current
     val scope = rememberCoroutineScope()
     var sheetHeightPx by remember { mutableFloatStateOf(0f) }
     val miniPlayerHeightDp = 64.dp
     val miniPlayerHeightPx = with(density) { miniPlayerHeightDp.toPx() }
+    val navBarBottomOffsetPx = with(density) { navBarBottomOffsetDp.toPx() }
 
     val decayAnimationSpec = rememberSplineBasedDecay<Float>()
 
@@ -60,9 +64,9 @@ fun NowPlayingBottomSheet(
         )
     }
 
-    LaunchedEffect(sheetHeightPx, miniPlayerHeightPx) {
+    LaunchedEffect(sheetHeightPx, miniPlayerHeightPx, navBarBottomOffsetPx) {
         if (sheetHeightPx > 0f) {
-            val collapsedOffset = (sheetHeightPx - miniPlayerHeightPx).coerceAtLeast(0f)
+            val collapsedOffset = (sheetHeightPx - miniPlayerHeightPx - navBarBottomOffsetPx).coerceAtLeast(0f)
             val newAnchors = DraggableAnchors<SheetState> {
                 SheetState.EXPANDED at 0f
                 SheetState.COLLAPSED at collapsedOffset
@@ -77,8 +81,12 @@ fun NowPlayingBottomSheet(
         0f
     }
 
-    val maxOffset = (sheetHeightPx - miniPlayerHeightPx).coerceAtLeast(1f)
+    val maxOffset = (sheetHeightPx - miniPlayerHeightPx - navBarBottomOffsetPx).coerceAtLeast(1f)
     val expansionProgress = (1f - (offset / maxOffset)).coerceIn(0f, 1f)
+
+    LaunchedEffect(expansionProgress) {
+        onProgressChanged(expansionProgress)
+    }
 
     // Corner radius interpolated from 14dp to 32dp
     val cornerRadius = (14f + (32f - 14f) * expansionProgress).dp

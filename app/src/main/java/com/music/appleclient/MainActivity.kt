@@ -12,6 +12,8 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import com.music.appleclient.core.designsystem.theme.AppleMusicColors
 import com.music.appleclient.core.designsystem.theme.AppleMusicTheme
@@ -36,17 +38,32 @@ class MainActivity : ComponentActivity() {
             AppleMusicTheme {
                 val playerState by playerController.uiState.collectAsState()
                 var selectedTab by remember { mutableIntStateOf(0) }
+                var expansionProgress by remember { mutableFloatStateOf(0f) }
+
+                val density = LocalDensity.current
+                val navBarHeightDp = 56.dp
+                val navBarHeightPx = with(density) { (navBarHeightDp + 64.dp).toPx() }
+
+                // Only show player when a real track title is loaded and login popup is not active
+                val hasActiveTrack = remember(playerState.currentTrack.title) {
+                    playerState.currentTrack.title.isNotBlank() &&
+                    playerState.currentTrack.title != "No Track Playing" &&
+                    playerState.currentTrack.title != "Now Playing"
+                }
+                val isAuthOpen by webPlayerBridge.isAuthPopupOpen
+                val showNowPlaying = hasActiveTrack && !isAuthOpen
 
                 Box(
                     modifier = Modifier
                         .fillMaxSize()
                         .background(AppleMusicColors.BackgroundDark)
                 ) {
-                    // Content Area: Web Player with Persistent CookieManager Session
+                    // Content Area: Web Player starting cleanly below Android status bar
                     Box(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(bottom = 56.dp)
+                            .statusBarsPadding()
+                            .padding(bottom = navBarHeightDp)
                     ) {
                         WebPlayerView(
                             bridge = webPlayerBridge,
@@ -55,11 +72,16 @@ class MainActivity : ComponentActivity() {
                     }
 
                     // iOS Glass Navigation Bar
+                    // Translates down off-screen as full player expands
                     NavigationBar(
                         containerColor = AppleMusicColors.SurfaceDark.copy(alpha = 0.94f),
                         modifier = Modifier
                             .align(Alignment.BottomCenter)
-                            .height(56.dp)
+                            .graphicsLayer {
+                                translationY = navBarHeightPx * expansionProgress
+                            }
+                            .navigationBarsPadding()
+                            .height(navBarHeightDp)
                     ) {
                         NavigationBarItem(
                             selected = selectedTab == 0,
@@ -128,17 +150,17 @@ class MainActivity : ComponentActivity() {
                         )
                     }
 
-                    // 120Hz Interactive Anchored Draggable Player Bottom Sheet
-                    // Docked directly above the navigation bar when collapsed
-                    Box(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(bottom = 56.dp)
-                    ) {
+                    // 120Hz Interactive Player Sheet
+                    // Placed above NavigationBar in z-order so it expands edge-to-edge
+                    if (showNowPlaying) {
                         NowPlayingBottomSheet(
                             playerState = playerState,
                             playerController = playerController,
-                            modifier = Modifier.fillMaxSize()
+                            navBarBottomOffsetDp = navBarHeightDp,
+                            onProgressChanged = { progress -> expansionProgress = progress },
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .navigationBarsPadding()
                         )
                     }
                 }
